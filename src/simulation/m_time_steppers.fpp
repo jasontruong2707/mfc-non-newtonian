@@ -46,6 +46,9 @@ module m_time_steppers
 
     use m_body_forces
 
+    use m_hb_function          !< Herschel-Bulkley non-Newtonian viscosity
+    use m_re_visc              !< Re_visc computation module
+
     implicit none
 
     type(vector_field), allocatable, dimension(:) :: q_cons_ts !<
@@ -971,7 +974,7 @@ contains
         type(vector_field) :: gm_alpha_qp
 
         real(wp) :: dt_local
-        integer :: j, k, l !< Generic loop iterators
+        integer :: j, k, l, i !< Generic loop iterators
 
         call s_convert_conservative_to_primitive_variables( &
             q_cons_ts(1)%vf, &
@@ -979,15 +982,21 @@ contains
             q_prim_vf, &
             idwint)
 
+        ! Synchronize ghost cells for primitive variables across MPI ranks
+        ! Required for non-Newtonian viscosity which computes velocity gradients
+        call s_populate_variables_buffers(bc_type, q_prim_vf, pb_ts(1)%sf, mv_ts(1)%sf)
+
         !$acc parallel loop collapse(3) gang vector default(present) private(vel, alpha, Re)
         do l = 0, p
             do k = 0, n
                 do j = 0, m
                     call s_compute_enthalpy(q_prim_vf, pres, rho, gamma, pi_inf, Re, H, alpha, vel, vel_sum, j, k, l)
+                    ! Note: s_compute_enthalpy now automatically uses m_re_visc when q_prim_vf and indices are provided
+                    !       This handles both Newtonian and non-Newtonian fluids automatically
 
                     ! Compute mixture sound speed
                     call s_compute_speed_of_sound(pres, rho, gamma, pi_inf, H, alpha, vel_sum, 0._wp, c)
-
+                    
                     call s_compute_dt_from_cfl(vel, c, max_dt, rho, Re, j, k, l)
                 end do
             end do

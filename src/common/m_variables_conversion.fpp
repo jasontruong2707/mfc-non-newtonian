@@ -25,6 +25,10 @@ module m_variables_conversion
         num_species, get_temperature, get_pressure, gas_constant, &
         get_mixture_molecular_weight, get_mixture_energy_mass
 
+#ifdef MFC_SIMULATION
+    use m_re_visc              !< Re_visc computation module (simulation only)
+#endif
+
     implicit none
 
     private; 
@@ -457,7 +461,8 @@ contains
     pure subroutine s_convert_species_to_mixture_variables_acc(rho_K, &
                                                                gamma_K, pi_inf_K, qv_K, &
                                                                alpha_K, alpha_rho_K, Re_K, &
-                                                               G_K, G)
+                                                               G_K, G, &
+                                                               q_prim_vf, j_idx, k_idx, l_idx)
 #ifdef _CRAYFTN
         !DIR$ INLINEALWAYS s_convert_species_to_mixture_variables_acc
 #else
@@ -472,9 +477,14 @@ contains
 
         real(wp), optional, intent(out) :: G_K
         real(wp), optional, dimension(num_fluids), intent(in) :: G
+        type(scalar_field), optional, dimension(sys_size), intent(in) :: q_prim_vf
+        integer, optional, intent(in) :: j_idx, k_idx, l_idx
 
-        integer :: i, j !< Generic loop iterators
+        integer :: i, j, q !< Generic loop iterators
         real(wp) :: alpha_K_sum
+#ifdef MFC_SIMULATION
+        real(wp), dimension(num_fluids, 2) :: Re_visc_per_phase
+#endif
 
 #ifdef MFC_SIMULATION
         ! Constraining the partial densities and the volume fractions within
@@ -517,20 +527,51 @@ contains
         end if
 
         if (viscous) then
+#ifdef MFC_SIMULATION
+            ! Check if we have primitive variables and indices (needed for non-Newtonian calculation)
+            if (present(q_prim_vf) .and. present(j_idx) .and. present(k_idx) .and. present(l_idx)) then
+                ! Use m_re_visc to compute Re_visc per-phase (handles both Newtonian and non-Newtonian)
+                call s_compute_re_visc(q_prim_vf, alpha_K, j_idx, k_idx, l_idx, Re_visc_per_phase)
+                
+                ! Compute mixture Re from per-phase values (Re = 1/mu_eff for CFL / viscous dt)
+                ! s_compute_re_visc returns Re_visc_per_phase(q,i) = 1/mu_q; mixture Re = 1/sum(alpha*mu) = 1/sum(alpha/Re_visc_per_phase)
+                do i = 1, 2
+                    Re_K(i) = 0._wp
+                    do q = 1, num_fluids
+                        if (Re_visc_per_phase(q, i) /= dflt_real .and. Re_visc_per_phase(q, i) > sgm_eps) then
+                            Re_K(i) = Re_K(i) + alpha_K(q)/Re_visc_per_phase(q, i)
+                        end if
+                    end do
+                    Re_K(i) = 1._wp/max(Re_K(i), sgm_eps)
+                end do
+            else
+                ! Fallback: Newtonian fluid calculation (when q_prim_vf not available)
+                do i = 1, 2
+                    Re_K(i) = dflt_real
 
+                    if (Re_size(i) > 0) Re_K(i) = 0._wp
+
+                    do j = 1, Re_size(i)
+                        Re_K(i) = alpha_K(Re_idx(i, j))/Res(i, j) + Re_K(i)
+                    end do
+
+                    Re_K(i) = 1._wp/max(Re_K(i), sgm_eps)
+                end do
+            end if
+#else
+            ! Pre-process/Post-process: Newtonian fluid calculation only
             do i = 1, 2
                 Re_K(i) = dflt_real
 
                 if (Re_size(i) > 0) Re_K(i) = 0._wp
 
                 do j = 1, Re_size(i)
-                    Re_K(i) = alpha_K(Re_idx(i, j))/Res(i, j) &
-                              + Re_K(i)
+                    Re_K(i) = alpha_K(Re_idx(i, j))/Res(i, j) + Re_K(i)
                 end do
 
                 Re_K(i) = 1._wp/max(Re_K(i), sgm_eps)
-
             end do
+#endif
         end if
 #endif
 

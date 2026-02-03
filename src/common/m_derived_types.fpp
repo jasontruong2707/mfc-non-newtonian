@@ -338,6 +338,14 @@ module m_derived_types
         real(wp) :: k_v     !< Bubble constants (see Preston (2007), Ando (2010))
         real(wp) :: cp_v
         real(wp) :: G
+        logical :: non_newtonian  !< Non-Newtonian fluid flag
+        real(wp) :: tau0          !< Yield stress for Herschel-Bulkley model
+        real(wp) :: K             !< Consistency index for Herschel-Bulkley model
+        real(wp) :: n             !< Flow behavior index for Herschel-Bulkley model
+        real(wp) :: mu_max        !< Maximum viscosity limit (shear)
+        real(wp) :: mu_min        !< Minimum viscosity limit (shear)
+        real(wp) :: mu_bulk       !< Bulk viscosity for non-Newtonian fluids
+        real(wp) :: hb_m          !< Papanastasiou regularization parameter for HB model
     end type physical_parameters
 
     type mpi_io_airfoil_ib_var

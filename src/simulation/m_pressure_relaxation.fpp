@@ -23,9 +23,6 @@ module m_pressure_relaxation
     real(wp), allocatable, dimension(:) :: gamma_min, pres_inf
     !$acc declare create(gamma_min, pres_inf)
 
-    real(wp), allocatable, dimension(:, :) :: Res
-    !$acc declare create(Res)
-
 contains
 
     !> Initialize the pressure relaxation module
@@ -41,25 +38,12 @@ contains
         end do
         !$acc update device(gamma_min, pres_inf)
 
-        if (viscous) then
-            @:ALLOCATE(Res(1:2, 1:maxval(Re_size)))
-            do i = 1, 2
-                do j = 1, Re_size(i)
-                    Res(i, j) = fluid_pp(Re_idx(i, j))%Re(i)
-                end do
-            end do
-            !$acc update device(Res, Re_idx, Re_size)
-        end if
-
     end subroutine s_initialize_pressure_relaxation_module
 
     !> Finalize the pressure relaxation module
     impure subroutine s_finalize_pressure_relaxation_module
 
         @:DEALLOCATE(gamma_min, pres_inf)
-        if (viscous) then
-            @:DEALLOCATE(Res)
-        end if
 
     end subroutine s_finalize_pressure_relaxation_module
 
@@ -227,8 +211,7 @@ contains
 
         real(wp), dimension(num_fluids) :: alpha_rho, alpha
         real(wp) :: rho, dyn_pres, gamma, pi_inf, pres_relax, sum_alpha
-        real(wp), dimension(2) :: Re
-        integer :: i, q
+        integer :: i
 
         !$acc loop seq
         do i = 1, num_fluids
@@ -280,18 +263,8 @@ contains
                 pi_inf = pi_inf + alpha(i)*pi_infs(i)
             end do
 
-            if (viscous) then
-                !$acc loop seq
-                do i = 1, 2
-                    Re(i) = dflt_real
-                    if (Re_size(i) > 0) Re(i) = 0._wp
-                    !$acc loop seq
-                    do q = 1, Re_size(i)
-                        Re(i) = alpha(Re_idx(i, q))/Res(i, q) + Re(i)
-                    end do
-                    Re(i) = 1._wp/max(Re(i), sgm_eps)
-                end do
-            end if
+            ! NOTE: Pressure relaxation internal-energy correction does not use
+            ! viscosity/Re directly. Keep this routine independent of Re inputs.
         end if
 
         ! Compute dynamic pressure and update internal energies

@@ -153,9 +153,10 @@ module m_global_parameters
     logical :: elasticity      !< elasticity modeling, true for hyper or hypo
     logical, parameter :: chemistry = .${chemistry}$. !< Chemistry modeling
     logical :: cu_tensor
-    logical :: viscous       !< Viscous effects
-    logical :: shear_stress  !< Shear stresses
-    logical :: bulk_stress   !< Bulk stresses
+    logical :: viscous           !< Viscous effects
+    logical :: shear_stress      !< Shear stresses
+    logical :: bulk_stress       !< Bulk stresses
+    logical :: any_non_newtonian !< True if any fluid is non-Newtonian
     logical :: cont_damage   !< Continuum damage modeling
 
     !$acc declare create(chemistry)
@@ -177,7 +178,7 @@ module m_global_parameters
         !$acc declare create(num_dims, num_vels, weno_polyn, weno_order, weno_num_stencils, num_fluids, wenojs, mapped_weno, wenoz, teno, wenoz_q, mhd, relativity)
     #:endif
 
-    !$acc declare create(mpp_lim, model_eqns, mixture_err, alt_soundspeed, avg_state, mp_weno, weno_eps, teno_CT, hypoelasticity, hyperelasticity, hyper_model, elasticity, low_Mach, viscous, shear_stress, bulk_stress, cont_damage)
+    !$acc declare create(mpp_lim, model_eqns, mixture_err, alt_soundspeed, avg_state, mp_weno, weno_eps, teno_CT, hypoelasticity, hyperelasticity, hyper_model, elasticity, low_Mach, viscous, shear_stress, bulk_stress, any_non_newtonian, cont_damage)
 
     logical :: relax          !< activate phase change
     integer :: relax_model    !< Relaxation model
@@ -567,6 +568,7 @@ contains
         viscous = .false.
         shear_stress = .false.
         bulk_stress = .false.
+        any_non_newtonian = .false.
         cont_damage = .false.
 
         #:if not MFC_CASE_OPTIMIZATION
@@ -615,6 +617,14 @@ contains
             fluid_pp(i)%k_v = dflt_real
             fluid_pp(i)%cp_v = dflt_real
             fluid_pp(i)%G = 0._wp
+            fluid_pp(i)%non_newtonian = .false.
+            fluid_pp(i)%tau0 = 0._wp
+            fluid_pp(i)%K = 0._wp
+            fluid_pp(i)%n = 1._wp
+            fluid_pp(i)%mu_max = dflt_real
+            fluid_pp(i)%mu_min = 0._wp
+            fluid_pp(i)%mu_bulk = 0._wp
+            fluid_pp(i)%hb_m = 1000._wp  ! Default Papanastasiou regularization parameter
         end do
 
         ! Tait EOS
@@ -1024,7 +1034,15 @@ contains
             if (Re_size(1) > 0._wp) shear_stress = .true.
             if (Re_size(2) > 0._wp) bulk_stress = .true.
 
-            !$acc update device(Re_size, viscous, shear_stress, bulk_stress)
+            ! Check if any fluid is non-Newtonian
+            do i = 1, num_fluids
+                if (fluid_pp(i)%non_newtonian) then
+                    any_non_newtonian = .true.
+                    exit
+                end if
+            end do
+
+            !$acc update device(Re_size, viscous, shear_stress, bulk_stress, any_non_newtonian)
 
             ! Bookkeeping the indexes of any viscous fluids and any pairs of
             ! fluids whose interface will support effects of surface tension

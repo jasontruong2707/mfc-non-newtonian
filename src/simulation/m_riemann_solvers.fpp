@@ -32,6 +32,7 @@ module m_riemann_solvers
     use m_mpi_proxy            !< Message passing interface (MPI) module proxy
 
     use m_variables_conversion !< State variables type conversion procedures
+    use m_re_visc              !< Dynamic Re_visc (Newtonian/non-Newtonian)
 
     use m_bubbles              !< To get the bubble wall pressure function
 
@@ -111,10 +112,32 @@ module m_riemann_solvers
     real(wp), allocatable, dimension(:) :: Gs
     !$acc declare create(Gs)
 
-    real(wp), allocatable, dimension(:, :) :: Res
-    !$acc declare create(Res)
-
 contains
+
+    !> Compute mixture Reynolds numbers from per-phase values
+    !! Re_mix(i) = 1 / sum_q ( alpha(q) / Re_per_phase(q,i) )
+    pure subroutine s_compute_mixture_re(alpha, Re_per_phase, Re_mix)
+        !$acc routine seq
+
+        real(wp), dimension(num_fluids), intent(in) :: alpha
+        real(wp), dimension(num_fluids, 2), intent(in) :: Re_per_phase
+        real(wp), dimension(2), intent(out) :: Re_mix
+
+        integer :: i, q
+
+        !$acc loop seq
+        do i = 1, 2
+            Re_mix(i) = 0._wp
+            !$acc loop seq
+            do q = 1, num_fluids
+                if (Re_per_phase(q, i) /= dflt_real .and. Re_per_phase(q, i) > sgm_eps) then
+                    Re_mix(i) = Re_mix(i) + alpha(q)/Re_per_phase(q, i)
+                end if
+            end do
+            Re_mix(i) = 1._wp/max(Re_mix(i), sgm_eps)
+        end do
+
+    end subroutine s_compute_mixture_re
 
     !> Dispatch to the subroutines that are utilized to compute the
         !! Riemann problem solution. For additional information please reference:
@@ -313,6 +336,7 @@ contains
         real(wp), dimension(6) :: tau_e_L, tau_e_R
         real(wp) :: G_L, G_R
         real(wp), dimension(2) :: Re_L, Re_R
+        real(wp), dimension(num_fluids, 2) :: Re_visc_per_phase_L, Re_visc_per_phase_R
         real(wp), dimension(3) :: xi_field_L, xi_field_R
 
         real(wp) :: rho_avg
@@ -458,25 +482,10 @@ contains
                             end do
 
                             if (viscous) then
-                                !$acc loop seq
-                                do i = 1, 2
-                                    Re_L(i) = dflt_real
-                                    Re_R(i) = dflt_real
-
-                                    if (Re_size(i) > 0) Re_L(i) = 0._wp
-                                    if (Re_size(i) > 0) Re_R(i) = 0._wp
-
-                                    !$acc loop seq
-                                    do q = 1, Re_size(i)
-                                        Re_L(i) = alpha_L(Re_idx(i, q))/Res(i, q) &
-                                                  + Re_L(i)
-                                        Re_R(i) = alpha_R(Re_idx(i, q))/Res(i, q) &
-                                                  + Re_R(i)
-                                    end do
-
-                                    Re_L(i) = 1._wp/max(Re_L(i), sgm_eps)
-                                    Re_R(i) = 1._wp/max(Re_R(i), sgm_eps)
-                                end do
+                                call s_compute_re_visc(q_prim_vf, alpha_L, j, k, l, Re_visc_per_phase_L)
+                                call s_compute_re_visc(q_prim_vf, alpha_R, j + 1, k, l, Re_visc_per_phase_R)
+                                call s_compute_mixture_re(alpha_L, Re_visc_per_phase_L, Re_L)
+                                call s_compute_mixture_re(alpha_R, Re_visc_per_phase_R, Re_R)
                             end if
 
                             if (chemistry) then
@@ -1125,6 +1134,7 @@ contains
         real(wp) :: qv_L, qv_R
         real(wp) :: c_L, c_R
         real(wp), dimension(2) :: Re_L, Re_R
+        real(wp), dimension(num_fluids, 2) :: Re_visc_per_phase_L, Re_visc_per_phase_R
 
         real(wp) :: rho_avg
         real(wp) :: H_avg
@@ -1272,36 +1282,10 @@ contains
                                 end do
 
                                 if (viscous) then
-                                    !$acc loop seq
-                                    do i = 1, 2
-                                        Re_L(i) = dflt_real
-
-                                        if (Re_size(i) > 0) Re_L(i) = 0._wp
-
-                                        !$acc loop seq
-                                        do q = 1, Re_size(i)
-                                            Re_L(i) = qL_prim_rs${XYZ}$_vf(j, k, l, E_idx + Re_idx(i, q))/Res(i, q) &
-                                                      + Re_L(i)
-                                        end do
-
-                                        Re_L(i) = 1._wp/max(Re_L(i), sgm_eps)
-
-                                    end do
-
-                                    !$acc loop seq
-                                    do i = 1, 2
-                                        Re_R(i) = dflt_real
-
-                                        if (Re_size(i) > 0) Re_R(i) = 0._wp
-
-                                        !$acc loop seq
-                                        do q = 1, Re_size(i)
-                                            Re_R(i) = qR_prim_rs${XYZ}$_vf(j + 1, k, l, E_idx + Re_idx(i, q))/Res(i, q) &
-                                                      + Re_R(i)
-                                        end do
-
-                                        Re_R(i) = 1._wp/max(Re_R(i), sgm_eps)
-                                    end do
+                                    call s_compute_re_visc(q_prim_vf, alpha_L, j, k, l, Re_visc_per_phase_L)
+                                    call s_compute_re_visc(q_prim_vf, alpha_R, j + 1, k, l, Re_visc_per_phase_R)
+                                    call s_compute_mixture_re(alpha_L, Re_visc_per_phase_L, Re_L)
+                                    call s_compute_mixture_re(alpha_R, Re_visc_per_phase_R, Re_R)
                                 end if
 
                                 E_L = gamma_L*pres_L + pi_inf_L + 5.e-1_wp*rho_L*vel_L_rms + qv_L
@@ -1957,35 +1941,20 @@ contains
 
                                 if (viscous) then
                                     if (num_fluids == 1) then ! Need to consider case with num_fluids >= 2
-                                        !$acc loop seq
-                                        do i = 1, 2
-                                            Re_L(i) = dflt_real
-
-                                            if (Re_size(i) > 0) Re_L(i) = 0._wp
-
-                                            !$acc loop seq
-                                            do q = 1, Re_size(i)
-                                                Re_L(i) = (1._wp - qL_prim_rs${XYZ}$_vf(j, k, l, E_idx + Re_idx(i, q)))/Res(i, q) &
-                                                          + Re_L(i)
-                                            end do
-
-                                            Re_L(i) = 1._wp/max(Re_L(i), sgm_eps)
-
-                                        end do
+                                        call s_compute_re_visc(q_prim_vf, (/1._wp/), j, k, l, Re_visc_per_phase_L)
+                                        call s_compute_re_visc(q_prim_vf, (/1._wp/), j + 1, k, l, Re_visc_per_phase_R)
 
                                         !$acc loop seq
                                         do i = 1, 2
-                                            Re_R(i) = dflt_real
-
-                                            if (Re_size(i) > 0) Re_R(i) = 0._wp
-
-                                            !$acc loop seq
-                                            do q = 1, Re_size(i)
-                                                Re_R(i) = (1._wp - qR_prim_rs${XYZ}$_vf(j + 1, k, l, E_idx + Re_idx(i, q)))/Res(i, q) &
-                                                          + Re_R(i)
-                                            end do
-
-                                            Re_R(i) = 1._wp/max(Re_R(i), sgm_eps)
+                                            if (Re_size(i) > 0) then
+                                                Re_L(i) = Re_visc_per_phase_L(1, i)/ &
+                                                          max(1._wp - qL_prim_rs${XYZ}$_vf(j, k, l, E_idx + Re_idx(i, 1)), sgm_eps)
+                                                Re_R(i) = Re_visc_per_phase_R(1, i)/ &
+                                                          max(1._wp - qR_prim_rs${XYZ}$_vf(j + 1, k, l, E_idx + Re_idx(i, 1)), sgm_eps)
+                                            else
+                                                Re_L(i) = dflt_real
+                                                Re_R(i) = dflt_real
+                                            end if
                                         end do
                                     end if
                                 end if
@@ -2424,36 +2393,10 @@ contains
                                 end do
 
                                 if (viscous) then
-                                    !$acc loop seq
-                                    do i = 1, 2
-                                        Re_L(i) = dflt_real
-
-                                        if (Re_size(i) > 0) Re_L(i) = 0._wp
-
-                                        !$acc loop seq
-                                        do q = 1, Re_size(i)
-                                            Re_L(i) = qL_prim_rs${XYZ}$_vf(j, k, l, E_idx + Re_idx(i, q))/Res(i, q) &
-                                                      + Re_L(i)
-                                        end do
-
-                                        Re_L(i) = 1._wp/max(Re_L(i), sgm_eps)
-
-                                    end do
-
-                                    !$acc loop seq
-                                    do i = 1, 2
-                                        Re_R(i) = dflt_real
-
-                                        if (Re_size(i) > 0) Re_R(i) = 0._wp
-
-                                        !$acc loop seq
-                                        do q = 1, Re_size(i)
-                                            Re_R(i) = qR_prim_rs${XYZ}$_vf(j + 1, k, l, E_idx + Re_idx(i, q))/Res(i, q) &
-                                                      + Re_R(i)
-                                        end do
-
-                                        Re_R(i) = 1._wp/max(Re_R(i), sgm_eps)
-                                    end do
+                                    call s_compute_re_visc(q_prim_vf, alpha_L, j, k, l, Re_visc_per_phase_L)
+                                    call s_compute_re_visc(q_prim_vf, alpha_R, j + 1, k, l, Re_visc_per_phase_R)
+                                    call s_compute_mixture_re(alpha_L, Re_visc_per_phase_L, Re_L)
+                                    call s_compute_mixture_re(alpha_R, Re_visc_per_phase_R, Re_R)
                                 end if
 
                                 if (chemistry) then
@@ -3218,18 +3161,8 @@ contains
         end do
         !$acc update device(Gs)
 
-        if (viscous) then
-            @:ALLOCATE(Res(1:2, 1:maxval(Re_size)))
-        end if
-
-        if (viscous) then
-            do i = 1, 2
-                do j = 1, Re_size(i)
-                    Res(i, j) = fluid_pp(Re_idx(i, j))%Re(i)
-                end do
-            end do
-            !$acc update device(Res, Re_idx, Re_size)
-        end if
+        ! NOTE: Viscosity/Re is handled dynamically via m_re_visc. No need to
+        ! precompute constant Res tables here (non-Newtonian depends on shear).
 
         !$acc enter data copyin(is1, is2, is3, isx, isy, isz)
 

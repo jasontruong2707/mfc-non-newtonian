@@ -838,6 +838,35 @@ contains
         end do
         ! END: Dimensional Splitting Loop
 
+        ! Add viscosity gradient correction for non-Newtonian fluids
+        ! This computes the ∇μ·S term that is missing from constant-viscosity formulation
+        if (viscous .and. any_non_newtonian) then
+            call nvtxStartRange("RHS-VISC-GRAD-CORR")
+            if (p > 0) then
+                call s_compute_viscous_gradient_correction(q_prim_qp%vf, &
+                                                           dq_prim_dx_qp(1)%vf, &
+                                                           dq_prim_dy_qp(1)%vf, &
+                                                           dq_prim_dz_qp(1)%vf, &
+                                                           rhs_vf, &
+                                                           idwint(1), idwint(2), idwint(3))
+            else if (n > 0) then
+                call s_compute_viscous_gradient_correction(q_prim_qp%vf, &
+                                                           dq_prim_dx_qp(1)%vf, &
+                                                           dq_prim_dy_qp(1)%vf, &
+                                                           dq_prim_dy_qp(1)%vf, &
+                                                           rhs_vf, &
+                                                           idwint(1), idwint(2), idwint(3))
+            else
+                call s_compute_viscous_gradient_correction(q_prim_qp%vf, &
+                                                           dq_prim_dx_qp(1)%vf, &
+                                                           dq_prim_dx_qp(1)%vf, &
+                                                           dq_prim_dx_qp(1)%vf, &
+                                                           rhs_vf, &
+                                                           idwint(1), idwint(2), idwint(3))
+            end if
+            call nvtxEndRange
+        end if
+
         if (ib) then
             !$acc parallel loop collapse(3) gang vector default(present)
             do l = 0, p

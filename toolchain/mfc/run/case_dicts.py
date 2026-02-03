@@ -142,6 +142,10 @@ for f_id in range(1, 10+1):
                       "mu_v", "k_v", "cp_v", "G", "cv", "qv", "qvp" ]:
         PRE_PROCESS[f"fluid_pp({f_id})%{real_attr}"] = ParamType.REAL
 
+    PRE_PROCESS[f"fluid_pp({f_id})%non_newtonian"] = ParamType.LOG
+    for real_attr in ["tau0", "K", "n", "mu_max", "mu_min", "mu_bulk", "hb_m"]:
+        PRE_PROCESS[f"fluid_pp({f_id})%{real_attr}"] = ParamType.REAL
+
 for bc_p_id in range(1, 10+1):
     for attribute in ["geometry","type","dir","loc"]:
         PRE_PROCESS[f"patch_bc({bc_p_id})%{attribute}"] = ParamType.INT
@@ -371,6 +375,10 @@ for f_id in range(1,10+1):
 
     for re_id in [1, 2]:
         SIMULATION[f"fluid_pp({f_id})%Re({re_id})"] = ParamType.REAL
+
+    SIMULATION[f"fluid_pp({f_id})%non_newtonian"] = ParamType.LOG
+    for real_attr in ["tau0", "K", "n", "mu_max", "mu_min", "mu_bulk", "hb_m"]:
+        SIMULATION[f"fluid_pp({f_id})%{real_attr}"] = ParamType.REAL
 
     for mono_id in range(1,4+1):
         for int_attr in ["pulse", "support", "num_elements", "element_on", "bb_num_freq"]:

@@ -1444,6 +1444,8 @@ contains
         if (ib) then
             !$acc update device(ib_markers%sf)
         end if
+
+        !$acc enter data copyin(fluid_pp)
     end subroutine s_initialize_gpu_vars
 
     impure subroutine s_finalize_modules
@@ -1472,6 +1474,10 @@ contains
         if (surface_tension)  call s_finalize_surface_tension_module()
         if (bodyForces) call s_finalize_body_forces_module()
         if (mhd .and. powell) call s_finalize_mhd_powell_module
+
+#ifdef MFC_OpenACC
+        !$acc exit data delete(fluid_pp)
+#endif
 
         ! Terminating MPI execution environment
         call s_mpi_finalize()
