@@ -86,7 +86,7 @@ contains
         
         ! Small minimum to prevent exactly zero (for numerical safety in downstream calculations)
         ! With Papanastasiou regularization, this can be very small
-        shear_rate = max(shear_rate, 1.0e-8_wp)
+        shear_rate = min(max(shear_rate, 1.0e-2_wp), 1.0e5_wp)
 
     end function f_compute_shear_rate_from_components
 

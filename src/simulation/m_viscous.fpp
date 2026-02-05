@@ -54,6 +54,7 @@ contains
         
         !$acc update device(Re_idx, Re_size)
         !$acc enter data copyin(is1_viscous, is2_viscous, is3_viscous, iv)
+
     end subroutine s_initialize_viscous_module
 
     !> The purpose of this subroutine is to compute the viscous
@@ -623,69 +624,7 @@ contains
 
             !$acc update device(is1_viscous, is2_viscous, is3_viscous)
 
-            ! For non-Newtonian fluids with sufficient buffer, use 4th order FD
-            ! For Newtonian fluids, use original 1st order one-sided differences
-            if (any_non_newtonian .and. buff_size >= 2) then
-                ! 4th order: use 4-point stencil for face gradients
-                ! dqL at face j-1/2 uses cells j-2, j-1, j, j+1
-                ! Formula: (-f_{j-2} + 27*f_{j-1} - 27*f_{j} + f_{j+1}) / (24*h) for uniform grid
-                ! For non-uniform, we use: (f_{j} - f_{j-1}) / (x_j - x_{j-1}) as base
-                ! and add higher-order correction
-
-                !$acc parallel loop collapse(3) gang vector default(present)
-                do l = is3_viscous%beg, is3_viscous%end
-                    do k = iy%beg, iy%end
-                        do j = is1_viscous%beg + 1, is1_viscous%end
-                            !$acc loop seq
-                            do i = iv%beg, iv%end
-                                if (j > is1_viscous%beg + 1 .and. j < is1_viscous%end) then
-                                    ! Interior: 4th order using 4-point stencil
-                                    ! Approximate derivative at face using cubic interpolation
-                                    dqL_prim_dx_n(1)%vf(i)%sf(j, k, l) = &
-                                        (-q_prim_qp%vf(i)%sf(j - 2, k, l) + &
-                                         27._wp*q_prim_qp%vf(i)%sf(j - 1, k, l) - &
-                                         27._wp*q_prim_qp%vf(i)%sf(j, k, l) + &
-                                         q_prim_qp%vf(i)%sf(j + 1, k, l))/ &
-                                        (24._wp*(x_cc(j) - x_cc(j - 1)))
-                                else
-                                    ! Near boundary: fall back to 1st order
-                                    dqL_prim_dx_n(1)%vf(i)%sf(j, k, l) = &
-                                        (q_prim_qp%vf(i)%sf(j, k, l) - &
-                                         q_prim_qp%vf(i)%sf(j - 1, k, l))/ &
-                                        (x_cc(j) - x_cc(j - 1))
-                                end if
-                            end do
-                        end do
-                    end do
-                end do
-
-                !$acc parallel loop collapse(3) gang vector default(present)
-                do l = is3_viscous%beg, is3_viscous%end
-                    do k = is2_viscous%beg, is2_viscous%end
-                        do j = is1_viscous%beg, is1_viscous%end - 1
-                            !$acc loop seq
-                            do i = iv%beg, iv%end
-                                if (j > is1_viscous%beg .and. j < is1_viscous%end - 1) then
-                                    ! Interior: 4th order
-                                    dqR_prim_dx_n(1)%vf(i)%sf(j, k, l) = &
-                                        (-q_prim_qp%vf(i)%sf(j - 1, k, l) + &
-                                         27._wp*q_prim_qp%vf(i)%sf(j, k, l) - &
-                                         27._wp*q_prim_qp%vf(i)%sf(j + 1, k, l) + &
-                                         q_prim_qp%vf(i)%sf(j + 2, k, l))/ &
-                                        (24._wp*(x_cc(j + 1) - x_cc(j)))
-                                else
-                                    ! Near boundary: fall back to 1st order
-                                    dqR_prim_dx_n(1)%vf(i)%sf(j, k, l) = &
-                                        (q_prim_qp%vf(i)%sf(j + 1, k, l) - &
-                                         q_prim_qp%vf(i)%sf(j, k, l))/ &
-                                        (x_cc(j + 1) - x_cc(j))
-                                end if
-                            end do
-                        end do
-                    end do
-                end do
-            else
-                ! Newtonian: original 1st order one-sided differences
+            ! Original 1st order one-sided differences
                 !$acc parallel loop collapse(3) gang vector default(present)
                 do l = is3_viscous%beg, is3_viscous%end
                     do k = iy%beg, iy%end
@@ -715,65 +654,10 @@ contains
                         end do
                     end do
                 end do
-            end if
 
             if (n > 0) then
 
-                if (any_non_newtonian .and. buff_size >= 2) then
-                    ! 4th order for y-direction
-                    !$acc parallel loop collapse(3) gang vector default(present)
-                    do l = is3_viscous%beg, is3_viscous%end
-                        do j = is2_viscous%beg + 1, is2_viscous%end
-                            do k = is1_viscous%beg, is1_viscous%end
-                                !$acc loop seq
-                                do i = iv%beg, iv%end
-                                    if (j > is2_viscous%beg + 1 .and. j < is2_viscous%end) then
-                                        ! Interior: 4th order
-                                        dqL_prim_dy_n(2)%vf(i)%sf(k, j, l) = &
-                                            (-q_prim_qp%vf(i)%sf(k, j - 2, l) + &
-                                             27._wp*q_prim_qp%vf(i)%sf(k, j - 1, l) - &
-                                             27._wp*q_prim_qp%vf(i)%sf(k, j, l) + &
-                                             q_prim_qp%vf(i)%sf(k, j + 1, l))/ &
-                                            (24._wp*(y_cc(j) - y_cc(j - 1)))
-                                    else
-                                        ! Near boundary: fall back to 1st order
-                                        dqL_prim_dy_n(2)%vf(i)%sf(k, j, l) = &
-                                            (q_prim_qp%vf(i)%sf(k, j, l) - &
-                                             q_prim_qp%vf(i)%sf(k, j - 1, l))/ &
-                                            (y_cc(j) - y_cc(j - 1))
-                                    end if
-                                end do
-                            end do
-                        end do
-                    end do
-
-                    !$acc parallel loop collapse(3) gang vector default(present)
-                    do l = is3_viscous%beg, is3_viscous%end
-                        do j = is2_viscous%beg, is2_viscous%end - 1
-                            do k = is1_viscous%beg, is1_viscous%end
-                                !$acc loop seq
-                                do i = iv%beg, iv%end
-                                    if (j > is2_viscous%beg .and. j < is2_viscous%end - 1) then
-                                        ! Interior: 4th order
-                                        dqR_prim_dy_n(2)%vf(i)%sf(k, j, l) = &
-                                            (-q_prim_qp%vf(i)%sf(k, j - 1, l) + &
-                                             27._wp*q_prim_qp%vf(i)%sf(k, j, l) - &
-                                             27._wp*q_prim_qp%vf(i)%sf(k, j + 1, l) + &
-                                             q_prim_qp%vf(i)%sf(k, j + 2, l))/ &
-                                            (24._wp*(y_cc(j + 1) - y_cc(j)))
-                                    else
-                                        ! Near boundary: fall back to 1st order
-                                        dqR_prim_dy_n(2)%vf(i)%sf(k, j, l) = &
-                                            (q_prim_qp%vf(i)%sf(k, j + 1, l) - &
-                                             q_prim_qp%vf(i)%sf(k, j, l))/ &
-                                            (y_cc(j + 1) - y_cc(j))
-                                    end if
-                                end do
-                            end do
-                        end do
-                    end do
-                else
-                    ! Newtonian: original 1st order
+                ! Original 1st order
                     !$acc parallel loop collapse(3) gang vector default(present)
                     do l = is3_viscous%beg, is3_viscous%end
                         do j = is2_viscous%beg + 1, is2_viscous%end
@@ -803,7 +687,6 @@ contains
                             end do
                         end do
                     end do
-                end if
 
                 !$acc parallel loop collapse(3) gang vector default(present)
                 do l = is3_viscous%beg, is3_viscous%end
@@ -886,61 +769,7 @@ contains
 
                 if (p > 0) then
 
-                    if (any_non_newtonian .and. buff_size >= 2) then
-                        ! 4th order for z-direction
-                        !$acc parallel loop collapse(3) gang vector default(present)
-                        do j = is3_viscous%beg + 1, is3_viscous%end
-                            do l = is2_viscous%beg, is2_viscous%end
-                                do k = is1_viscous%beg, is1_viscous%end
-                                    !$acc loop seq
-                                    do i = iv%beg, iv%end
-                                        if (j > is3_viscous%beg + 1 .and. j < is3_viscous%end) then
-                                            ! Interior: 4th order
-                                            dqL_prim_dz_n(3)%vf(i)%sf(k, l, j) = &
-                                                (-q_prim_qp%vf(i)%sf(k, l, j - 2) + &
-                                                 27._wp*q_prim_qp%vf(i)%sf(k, l, j - 1) - &
-                                                 27._wp*q_prim_qp%vf(i)%sf(k, l, j) + &
-                                                 q_prim_qp%vf(i)%sf(k, l, j + 1))/ &
-                                                (24._wp*(z_cc(j) - z_cc(j - 1)))
-                                        else
-                                            ! Near boundary: fall back to 1st order
-                                            dqL_prim_dz_n(3)%vf(i)%sf(k, l, j) = &
-                                                (q_prim_qp%vf(i)%sf(k, l, j) - &
-                                                 q_prim_qp%vf(i)%sf(k, l, j - 1))/ &
-                                                (z_cc(j) - z_cc(j - 1))
-                                        end if
-                                    end do
-                                end do
-                            end do
-                        end do
-
-                        !$acc parallel loop collapse(3) gang vector default(present)
-                        do j = is3_viscous%beg, is3_viscous%end - 1
-                            do l = is2_viscous%beg, is2_viscous%end
-                                do k = is1_viscous%beg, is1_viscous%end
-                                    !$acc loop seq
-                                    do i = iv%beg, iv%end
-                                        if (j > is3_viscous%beg .and. j < is3_viscous%end - 1) then
-                                            ! Interior: 4th order
-                                            dqR_prim_dz_n(3)%vf(i)%sf(k, l, j) = &
-                                                (-q_prim_qp%vf(i)%sf(k, l, j - 1) + &
-                                                 27._wp*q_prim_qp%vf(i)%sf(k, l, j) - &
-                                                 27._wp*q_prim_qp%vf(i)%sf(k, l, j + 1) + &
-                                                 q_prim_qp%vf(i)%sf(k, l, j + 2))/ &
-                                                (24._wp*(z_cc(j + 1) - z_cc(j)))
-                                        else
-                                            ! Near boundary: fall back to 1st order
-                                            dqR_prim_dz_n(3)%vf(i)%sf(k, l, j) = &
-                                                (q_prim_qp%vf(i)%sf(k, l, j + 1) - &
-                                                 q_prim_qp%vf(i)%sf(k, l, j))/ &
-                                                (z_cc(j + 1) - z_cc(j))
-                                        end if
-                                    end do
-                                end do
-                            end do
-                        end do
-                    else
-                        ! Newtonian: original 1st order
+                    ! Original 1st order
                         !$acc parallel loop collapse(3) gang vector default(present)
                         do j = is3_viscous%beg + 1, is3_viscous%end
                             do l = is2_viscous%beg, is2_viscous%end
@@ -972,7 +801,6 @@ contains
                                 end do
                             end do
                         end do
-                    end if
 
                     !$acc parallel loop collapse(3) gang vector default(present)
                     do l = is3_viscous%beg + 1, is3_viscous%end - 1
@@ -1146,15 +974,14 @@ contains
                                                    dq_prim_dz_qp(1)%vf(i))
                     end do
 
-                else
-
+                end if
+                if (p == 0) then
                     do i = iv%beg, iv%end
                         call s_compute_fd_gradient(q_prim_qp%vf(i), &
                                                    dq_prim_dx_qp(1)%vf(i), &
                                                    dq_prim_dy_qp(1)%vf(i), &
                                                    dq_prim_dy_qp(1)%vf(i))
                     end do
-
                 end if
 
             else
@@ -1500,8 +1327,7 @@ contains
         !!  @param grad_y Second coordinate direction component of the derivative
         !!  @param grad_z Third coordinate direction component of the derivative
         !!  @param norm Norm of the gradient vector
-        !!  Note: For non-Newtonian fluids, uses 4th order central differences in interior
-        !!        For Newtonian fluids, uses 2nd order central differences (original author's method)
+        !!  Uses 2nd order central differences (original author's method)
     subroutine s_compute_fd_gradient(var, grad_x, grad_y, grad_z)
 
         type(scalar_field), intent(in) :: var
@@ -1511,7 +1337,6 @@ contains
         type(int_bounds_info) :: ix, iy, iz
 
         integer :: j, k, l !< Generic loop iterators
-        real(wp) :: fd_coeff_m2, fd_coeff_m1, fd_coeff_p1, fd_coeff_p2 !< 4th order FD coefficients
 
         ix%beg = 1 - buff_size; ix%end = m + buff_size - 1
         if (n > 0) then
@@ -1530,71 +1355,11 @@ contains
 
         !$acc update device(is1_viscous, is2_viscous, is3_viscous)
 
-        if (any_non_newtonian .and. buff_size >= 2) then
-            ! Non-Newtonian fluids: use 4th order central differences for higher accuracy
-            ! The 4th order stencil accesses j±2, so we need to restrict loop bounds
-            ! to ensure we don't access outside the allocated array bounds.
-            ! Array is allocated from -buff_size to m+buff_size.
-            ! For 4th order, loop from max(ix%beg, 2-buff_size) to min(ix%end, m+buff_size-2)
-            !$acc parallel loop collapse(3) gang vector default(present) private(fd_coeff_m2, fd_coeff_m1, fd_coeff_p1, fd_coeff_p2)
-            do l = is3_viscous%beg, is3_viscous%end
-                do k = is2_viscous%beg, is2_viscous%end
-                    do j = max(is1_viscous%beg, 2 - buff_size), min(is1_viscous%end, m + buff_size - 2)
-                        ! 4th order central difference: f' = (f_{-2} - 8*f_{-1} + 8*f_{+1} - f_{+2}) / (12*h)
-                        ! For non-uniform grids, we compute coefficients inline
-                        fd_coeff_m2 = 1._wp/(x_cc(j - 2) - 8._wp*x_cc(j - 1) - x_cc(j + 2) + 8._wp*x_cc(j + 1))
-                        fd_coeff_m1 = -8._wp*fd_coeff_m2
-                        fd_coeff_p1 = -fd_coeff_m1
-                        fd_coeff_p2 = -fd_coeff_m2
-                        grad_x%sf(j, k, l) = fd_coeff_m2*var%sf(j - 2, k, l) + &
-                                             fd_coeff_m1*var%sf(j - 1, k, l) + &
-                                             fd_coeff_p1*var%sf(j + 1, k, l) + &
-                                             fd_coeff_p2*var%sf(j + 2, k, l)
-                    end do
-                end do
-            end do
-
-            if (n > 0) then
-                !$acc parallel loop collapse(3) gang vector default(present) private(fd_coeff_m2, fd_coeff_m1, fd_coeff_p1, fd_coeff_p2)
-                do l = is3_viscous%beg, is3_viscous%end
-                    do k = max(is2_viscous%beg, 2 - buff_size), min(is2_viscous%end, n + buff_size - 2)
-                        do j = is1_viscous%beg, is1_viscous%end
-                            fd_coeff_m2 = 1._wp/(y_cc(k - 2) - 8._wp*y_cc(k - 1) - y_cc(k + 2) + 8._wp*y_cc(k + 1))
-                            fd_coeff_m1 = -8._wp*fd_coeff_m2
-                            fd_coeff_p1 = -fd_coeff_m1
-                            fd_coeff_p2 = -fd_coeff_m2
-                            grad_y%sf(j, k, l) = fd_coeff_m2*var%sf(j, k - 2, l) + &
-                                                 fd_coeff_m1*var%sf(j, k - 1, l) + &
-                                                 fd_coeff_p1*var%sf(j, k + 1, l) + &
-                                                 fd_coeff_p2*var%sf(j, k + 2, l)
-                        end do
-                    end do
-                end do
-            end if
-
-            if (p > 0) then
-                !$acc parallel loop collapse(3) gang vector default(present) private(fd_coeff_m2, fd_coeff_m1, fd_coeff_p1, fd_coeff_p2)
-                do l = max(is3_viscous%beg, 2 - buff_size), min(is3_viscous%end, p + buff_size - 2)
-                    do k = is2_viscous%beg, is2_viscous%end
-                        do j = is1_viscous%beg, is1_viscous%end
-                            fd_coeff_m2 = 1._wp/(z_cc(l - 2) - 8._wp*z_cc(l - 1) - z_cc(l + 2) + 8._wp*z_cc(l + 1))
-                            fd_coeff_m1 = -8._wp*fd_coeff_m2
-                            fd_coeff_p1 = -fd_coeff_m1
-                            fd_coeff_p2 = -fd_coeff_m2
-                            grad_z%sf(j, k, l) = fd_coeff_m2*var%sf(j, k, l - 2) + &
-                                                 fd_coeff_m1*var%sf(j, k, l - 1) + &
-                                                 fd_coeff_p1*var%sf(j, k, l + 1) + &
-                                                 fd_coeff_p2*var%sf(j, k, l + 2)
-                        end do
-                    end do
-                end do
-            end if
-        else
-            ! Newtonian fluids or insufficient buffer: use 2nd order central differences (original author's method)
+        ! Use 2nd order central differences (original author's method)
             !$acc parallel loop collapse(3) gang vector default(present)
             do l = is3_viscous%beg, is3_viscous%end
                 do k = is2_viscous%beg, is2_viscous%end
-                    do j = is1_viscous%beg, is1_viscous%end
+                    do j = is1_viscous%beg + 1, is1_viscous%end - 1
                         grad_x%sf(j, k, l) = &
                             (var%sf(j + 1, k, l) - var%sf(j - 1, k, l))/ &
                             (x_cc(j + 1) - x_cc(j - 1))
@@ -1605,7 +1370,7 @@ contains
             if (n > 0) then
                 !$acc parallel loop collapse(3) gang vector default(present)
                 do l = is3_viscous%beg, is3_viscous%end
-                    do k = is2_viscous%beg, is2_viscous%end
+                    do k = is2_viscous%beg + 1, is2_viscous%end - 1
                         do j = is1_viscous%beg, is1_viscous%end
                             grad_y%sf(j, k, l) = &
                                 (var%sf(j, k + 1, l) - var%sf(j, k - 1, l))/ &
@@ -1617,7 +1382,7 @@ contains
 
             if (p > 0) then
                 !$acc parallel loop collapse(3) gang vector default(present)
-                do l = is3_viscous%beg, is3_viscous%end
+                do l = is3_viscous%beg + 1, is3_viscous%end - 1
                     do k = is2_viscous%beg, is2_viscous%end
                         do j = is1_viscous%beg, is1_viscous%end
                             grad_z%sf(j, k, l) = &
@@ -1627,103 +1392,105 @@ contains
                     end do
                 end do
             end if
-        end if
 
-        !$acc parallel loop collapse(2) gang vector default(present)
-        do l = idwbuff(3)%beg, idwbuff(3)%end
-            do k = idwbuff(2)%beg, idwbuff(2)%end
-                grad_x%sf(idwbuff(1)%beg, k, l) = &
-                    (-3._wp*var%sf(idwbuff(1)%beg, k, l) + 4._wp*var%sf(idwbuff(1)%beg + 1, k, l) - var%sf(idwbuff(1)%beg + 2, k, l))/ &
-                    (x_cc(idwbuff(1)%beg + 2) - x_cc(idwbuff(1)%beg))
-                grad_x%sf(idwbuff(1)%end, k, l) = &
-                    (+3._wp*var%sf(idwbuff(1)%end, k, l) - 4._wp*var%sf(idwbuff(1)%end - 1, k, l) + var%sf(idwbuff(1)%end - 2, k, l))/ &
-                    (x_cc(idwbuff(1)%end) - x_cc(idwbuff(1)%end - 2))
-            end do
-        end do
-        if (n > 0) then
+        ! Boundary overwrite: 2nd order one-sided at boundary
             !$acc parallel loop collapse(2) gang vector default(present)
             do l = idwbuff(3)%beg, idwbuff(3)%end
-                do j = idwbuff(1)%beg, idwbuff(1)%end
-                    grad_y%sf(j, idwbuff(2)%beg, l) = &
-                        (-3._wp*var%sf(j, idwbuff(2)%beg, l) + 4._wp*var%sf(j, idwbuff(2)%beg + 1, l) - var%sf(j, idwbuff(2)%beg + 2, l))/ &
-                        (y_cc(idwbuff(2)%beg + 2) - y_cc(idwbuff(2)%beg))
-                    grad_y%sf(j, idwbuff(2)%end, l) = &
-                        (+3._wp*var%sf(j, idwbuff(2)%end, l) - 4._wp*var%sf(j, idwbuff(2)%end - 1, l) + var%sf(j, idwbuff(2)%end - 2, l))/ &
-                        (y_cc(idwbuff(2)%end) - y_cc(idwbuff(2)%end - 2))
+                do k = idwbuff(2)%beg, idwbuff(2)%end
+                    grad_x%sf(idwbuff(1)%beg, k, l) = &
+                        (-3._wp*var%sf(idwbuff(1)%beg, k, l) + 4._wp*var%sf(idwbuff(1)%beg + 1, k, l) - var%sf(idwbuff(1)%beg + 2, k, l))/ &
+                        (x_cc(idwbuff(1)%beg + 2) - x_cc(idwbuff(1)%beg))
+                    grad_x%sf(idwbuff(1)%end, k, l) = &
+                        (+3._wp*var%sf(idwbuff(1)%end, k, l) - 4._wp*var%sf(idwbuff(1)%end - 1, k, l) + var%sf(idwbuff(1)%end - 2, k, l))/ &
+                        (x_cc(idwbuff(1)%end) - x_cc(idwbuff(1)%end - 2))
                 end do
             end do
-            if (p > 0) then
+        if (n > 0) then
+            ! 2nd order one-sided for y
                 !$acc parallel loop collapse(2) gang vector default(present)
-                do k = idwbuff(2)%beg, idwbuff(2)%end
+                do l = idwbuff(3)%beg, idwbuff(3)%end
                     do j = idwbuff(1)%beg, idwbuff(1)%end
-                        grad_z%sf(j, k, idwbuff(3)%beg) = &
-                            (-3._wp*var%sf(j, k, idwbuff(3)%beg) + 4._wp*var%sf(j, k, idwbuff(3)%beg + 1) - var%sf(j, k, idwbuff(3)%beg + 2))/ &
-                            (z_cc(idwbuff(3)%beg + 2) - z_cc(is3_viscous%beg))
-                        grad_z%sf(j, k, idwbuff(3)%end) = &
-                            (+3._wp*var%sf(j, k, idwbuff(3)%end) - 4._wp*var%sf(j, k, idwbuff(3)%end - 1) + var%sf(j, k, idwbuff(3)%end - 2))/ &
-                            (z_cc(idwbuff(3)%end) - z_cc(idwbuff(3)%end - 2))
+                        grad_y%sf(j, idwbuff(2)%beg, l) = &
+                            (-3._wp*var%sf(j, idwbuff(2)%beg, l) + 4._wp*var%sf(j, idwbuff(2)%beg + 1, l) - var%sf(j, idwbuff(2)%beg + 2, l))/ &
+                            (y_cc(idwbuff(2)%beg + 2) - y_cc(idwbuff(2)%beg))
+                        grad_y%sf(j, idwbuff(2)%end, l) = &
+                            (+3._wp*var%sf(j, idwbuff(2)%end, l) - 4._wp*var%sf(j, idwbuff(2)%end - 1, l) + var%sf(j, idwbuff(2)%end - 2, l))/ &
+                            (y_cc(idwbuff(2)%end) - y_cc(idwbuff(2)%end - 2))
                     end do
                 end do
+            if (p > 0) then
+                ! 2nd order one-sided for z
+                    !$acc parallel loop collapse(2) gang vector default(present)
+                    do k = idwbuff(2)%beg, idwbuff(2)%end
+                        do j = idwbuff(1)%beg, idwbuff(1)%end
+                            grad_z%sf(j, k, idwbuff(3)%beg) = &
+                                (-3._wp*var%sf(j, k, idwbuff(3)%beg) + 4._wp*var%sf(j, k, idwbuff(3)%beg + 1) - var%sf(j, k, idwbuff(3)%beg + 2))/ &
+                                (z_cc(idwbuff(3)%beg + 2) - z_cc(is3_viscous%beg))
+                            grad_z%sf(j, k, idwbuff(3)%end) = &
+                                (+3._wp*var%sf(j, k, idwbuff(3)%end) - 4._wp*var%sf(j, k, idwbuff(3)%end - 1) + var%sf(j, k, idwbuff(3)%end - 2))/ &
+                                (z_cc(idwbuff(3)%end) - z_cc(idwbuff(3)%end - 2))
+                        end do
+                    end do
+                end if
             end if
-        end if
 
         if (bc_x%beg <= BC_GHOST_EXTRAP) then
             !$acc parallel loop collapse(2) gang vector default(present)
-            do l = idwbuff(3)%beg, idwbuff(3)%end
-                do k = idwbuff(2)%beg, idwbuff(2)%end
-                    grad_x%sf(0, k, l) = (-3._wp*var%sf(0, k, l) + 4._wp*var%sf(1, k, l) - var%sf(2, k, l))/ &
-                                         (x_cc(2) - x_cc(0))
+                do l = idwbuff(3)%beg, idwbuff(3)%end
+                    do k = idwbuff(2)%beg, idwbuff(2)%end
+                        grad_x%sf(0, k, l) = (-3._wp*var%sf(0, k, l) + 4._wp*var%sf(1, k, l) - var%sf(2, k, l))/ &
+                                             (x_cc(2) - x_cc(0))
+                    end do
                 end do
-            end do
         end if
         if (bc_x%end <= BC_GHOST_EXTRAP) then
             !$acc parallel loop collapse(2) gang vector default(present)
-            do l = idwbuff(3)%beg, idwbuff(3)%end
-                do k = idwbuff(2)%beg, idwbuff(2)%end
-                    grad_x%sf(m, k, l) = (3._wp*var%sf(m, k, l) - 4._wp*var%sf(m - 1, k, l) + var%sf(m - 2, k, l))/ &
-                                         (x_cc(m) - x_cc(m - 2))
+                do l = idwbuff(3)%beg, idwbuff(3)%end
+                    do k = idwbuff(2)%beg, idwbuff(2)%end
+                        grad_x%sf(m, k, l) = (3._wp*var%sf(m, k, l) - 4._wp*var%sf(m - 1, k, l) + var%sf(m - 2, k, l))/ &
+                                             (x_cc(m) - x_cc(m - 2))
+                    end do
                 end do
-            end do
         end if
         if (n > 0) then
             if (bc_y%beg <= BC_GHOST_EXTRAP .and. bc_y%beg /= BC_NULL) then
                 !$acc parallel loop collapse(2) gang vector default(present)
-                do l = idwbuff(3)%beg, idwbuff(3)%end
-                    do j = idwbuff(1)%beg, idwbuff(1)%end
-                        grad_y%sf(j, 0, l) = (-3._wp*var%sf(j, 0, l) + 4._wp*var%sf(j, 1, l) - var%sf(j, 2, l))/ &
-                                             (y_cc(2) - y_cc(0))
-                    end do
-                end do
-            end if
-            if (bc_y%end <= BC_GHOST_EXTRAP) then
-                !$acc parallel loop collapse(2) gang vector default(present)
-                do l = idwbuff(3)%beg, idwbuff(3)%end
-                    do j = idwbuff(1)%beg, idwbuff(1)%end
-                        grad_y%sf(j, n, l) = (3._wp*var%sf(j, n, l) - 4._wp*var%sf(j, n - 1, l) + var%sf(j, n - 2, l))/ &
-                                             (y_cc(n) - y_cc(n - 2))
-                    end do
-                end do
-            end if
-            if (p > 0) then
-                if (bc_z%beg <= BC_GHOST_EXTRAP) then
-                    !$acc parallel loop collapse(2) gang vector default(present)
-                    do k = idwbuff(2)%beg, idwbuff(2)%end
+                    do l = idwbuff(3)%beg, idwbuff(3)%end
                         do j = idwbuff(1)%beg, idwbuff(1)%end
-                            grad_z%sf(j, k, 0) = &
-                                (-3._wp*var%sf(j, k, 0) + 4._wp*var%sf(j, k, 1) - var%sf(j, k, 2))/ &
-                                (z_cc(2) - z_cc(0))
+                            grad_y%sf(j, 0, l) = (-3._wp*var%sf(j, 0, l) + 4._wp*var%sf(j, 1, l) - var%sf(j, 2, l))/ &
+                                                 (y_cc(2) - y_cc(0))
                         end do
                     end do
                 end if
-                if (bc_z%end <= BC_GHOST_EXTRAP) then
-                    !$acc parallel loop collapse(2) gang vector default(present)
-                    do k = idwbuff(2)%beg, idwbuff(2)%end
+            if (bc_y%end <= BC_GHOST_EXTRAP) then
+                !$acc parallel loop collapse(2) gang vector default(present)
+                    do l = idwbuff(3)%beg, idwbuff(3)%end
                         do j = idwbuff(1)%beg, idwbuff(1)%end
-                            grad_z%sf(j, k, p) = &
-                                (3._wp*var%sf(j, k, p) - 4._wp*var%sf(j, k, p - 1) + var%sf(j, k, p - 2))/ &
-                                (z_cc(p) - z_cc(p - 2))
+                            grad_y%sf(j, n, l) = (3._wp*var%sf(j, n, l) - 4._wp*var%sf(j, n - 1, l) + var%sf(j, n - 2, l))/ &
+                                                 (y_cc(n) - y_cc(n - 2))
                         end do
                     end do
+                end if
+            if (p > 0) then
+                if (bc_z%beg <= BC_GHOST_EXTRAP) then
+                    !$acc parallel loop collapse(2) gang vector default(present)
+                        do k = idwbuff(2)%beg, idwbuff(2)%end
+                            do j = idwbuff(1)%beg, idwbuff(1)%end
+                                grad_z%sf(j, k, 0) = &
+                                    (-3._wp*var%sf(j, k, 0) + 4._wp*var%sf(j, k, 1) - var%sf(j, k, 2))/ &
+                                    (z_cc(2) - z_cc(0))
+                            end do
+                        end do
+                end if
+                if (bc_z%end <= BC_GHOST_EXTRAP) then
+                    !$acc parallel loop collapse(2) gang vector default(present)
+                        do k = idwbuff(2)%beg, idwbuff(2)%end
+                            do j = idwbuff(1)%beg, idwbuff(1)%end
+                                grad_z%sf(j, k, p) = &
+                                    (3._wp*var%sf(j, k, p) - 4._wp*var%sf(j, k, p - 1) + var%sf(j, k, p - 2))/ &
+                                    (z_cc(p) - z_cc(p - 2))
+                            end do
+                        end do
                 end if
             end if
         end if
@@ -1765,9 +1532,6 @@ contains
         real(wp), dimension(num_fluids) :: mu_shear_phases_xp, mu_shear_phases_xm
         real(wp), dimension(num_fluids) :: mu_shear_phases_yp, mu_shear_phases_ym
         real(wp), dimension(num_fluids) :: mu_shear_phases_zp, mu_shear_phases_zm
-        real(wp), dimension(num_fluids) :: mu_shear_phases_xp2, mu_shear_phases_xm2
-        real(wp), dimension(num_fluids) :: mu_shear_phases_yp2, mu_shear_phases_ym2
-        real(wp), dimension(num_fluids) :: mu_shear_phases_zp2, mu_shear_phases_zm2
         real(wp), dimension(num_fluids) :: dmu_dx_phases, dmu_dy_phases, dmu_dz_phases
         real(wp), dimension(num_fluids) :: alpha_visc
         real(wp) :: du_dx, du_dy, du_dz, dv_dx, dv_dy, dv_dz, dw_dx, dw_dy, dw_dz
@@ -1776,8 +1540,6 @@ contains
         real(wp) :: corr_mom_x, corr_mom_y, corr_mom_z, corr_energy
         real(wp) :: phase_corr_x, phase_corr_y, phase_corr_z
         real(wp) :: u_vel, v_vel, w_vel
-        real(wp) :: coeff_4th
-        logical :: use_4th_order_x, use_4th_order_y, use_4th_order_z
         integer :: j, k, l, i, q
 
         ! Only proceed if any fluid is non-Newtonian
@@ -1790,12 +1552,11 @@ contains
         !$acc parallel loop collapse(3) gang vector default(present) &
         !$acc private(mu_shear_phases, mu_bulk_phases, alpha_visc) &
         !$acc private(mu_shear_phases_xp, mu_shear_phases_xm, mu_shear_phases_yp, mu_shear_phases_ym, mu_shear_phases_zp, mu_shear_phases_zm) &
-        !$acc private(mu_shear_phases_xp2, mu_shear_phases_xm2, mu_shear_phases_yp2, mu_shear_phases_ym2, mu_shear_phases_zp2, mu_shear_phases_zm2) &
         !$acc private(dmu_dx_phases, dmu_dy_phases, dmu_dz_phases) &
         !$acc private(du_dx, du_dy, du_dz, dv_dx, dv_dy, dv_dz, dw_dx, dw_dy, dw_dz) &
         !$acc private(div_u, S_xx, S_yy, S_zz, S_xy, S_xz, S_yz) &
         !$acc private(corr_mom_x, corr_mom_y, corr_mom_z, corr_energy, phase_corr_x, phase_corr_y, phase_corr_z) &
-        !$acc private(u_vel, v_vel, w_vel, coeff_4th, use_4th_order_x, use_4th_order_y, use_4th_order_z)
+        !$acc private(u_vel, v_vel, w_vel)
         do l = is3_viscous%beg, is3_viscous%end
             do k = is2_viscous%beg, is2_viscous%end
                 do j = is1_viscous%beg, is1_viscous%end
@@ -1810,14 +1571,6 @@ contains
                         end if
                     end do
 
-                    ! Determine if 4th order can be used for viscosity gradient
-                    ! Since s_compute_phase_viscosity_at_cell also uses 4th-order FD internally
-                    ! (which accesses j±2), and we call it at j±2, the total stencil width is 4 cells.
-                    ! We need buff_size >= 4 and sufficient distance from boundaries.
-                    use_4th_order_x = (buff_size >= 4) .and. (j > 3) .and. (j < m - 3)
-                    use_4th_order_y = (buff_size >= 4) .and. (n > 0) .and. (k > 3) .and. (k < n - 3)
-                    use_4th_order_z = (buff_size >= 4) .and. (p > 0) .and. (l > 3) .and. (l < p - 3)
-
                     ! Initialize per-phase gradients to zero
                     !$acc loop seq
                     do q = 1, num_fluids
@@ -1828,21 +1581,10 @@ contains
 
                     ! ===== X-DIRECTION GRADIENT =====
                     ! Note: We don't pass pre-computed gradients here because the indices
-                    ! (j±1, j±2, etc.) may be outside the local gradient array bounds.
+                    ! (j±1, etc.) may be outside the local gradient array bounds.
                     ! Instead, let s_compute_phase_viscosity_at_cell compute gradients
                     ! directly from q_prim_vf which includes ghost cells.
-                    if (use_4th_order_x) then
-                        call s_compute_phase_viscosity_at_cell(q_prim_vf, j + 1, k, l, mu_shear_phases_xp, mu_bulk_phases)
-                        call s_compute_phase_viscosity_at_cell(q_prim_vf, j - 1, k, l, mu_shear_phases_xm, mu_bulk_phases)
-                        call s_compute_phase_viscosity_at_cell(q_prim_vf, j + 2, k, l, mu_shear_phases_xp2, mu_bulk_phases)
-                        call s_compute_phase_viscosity_at_cell(q_prim_vf, j - 2, k, l, mu_shear_phases_xm2, mu_bulk_phases)
-                        coeff_4th = 1._wp/(x_cc(j - 2) - 8._wp*x_cc(j - 1) - x_cc(j + 2) + 8._wp*x_cc(j + 1))
-                        !$acc loop seq
-                        do q = 1, num_fluids
-                            dmu_dx_phases(q) = coeff_4th*(mu_shear_phases_xm2(q) - 8._wp*mu_shear_phases_xm(q) + &
-                                                          8._wp*mu_shear_phases_xp(q) - mu_shear_phases_xp2(q))
-                        end do
-                    else if (j > 0 .and. j < m) then
+                    if (j > 0 .and. j < m) then
                         call s_compute_phase_viscosity_at_cell(q_prim_vf, j + 1, k, l, mu_shear_phases_xp, mu_bulk_phases)
                         call s_compute_phase_viscosity_at_cell(q_prim_vf, j - 1, k, l, mu_shear_phases_xm, mu_bulk_phases)
                         !$acc loop seq
@@ -1852,18 +1594,7 @@ contains
                     end if
 
                     ! ===== Y-DIRECTION GRADIENT =====
-                    if (use_4th_order_y) then
-                        call s_compute_phase_viscosity_at_cell(q_prim_vf, j, k + 1, l, mu_shear_phases_yp, mu_bulk_phases)
-                        call s_compute_phase_viscosity_at_cell(q_prim_vf, j, k - 1, l, mu_shear_phases_ym, mu_bulk_phases)
-                        call s_compute_phase_viscosity_at_cell(q_prim_vf, j, k + 2, l, mu_shear_phases_yp2, mu_bulk_phases)
-                        call s_compute_phase_viscosity_at_cell(q_prim_vf, j, k - 2, l, mu_shear_phases_ym2, mu_bulk_phases)
-                        coeff_4th = 1._wp/(y_cc(k - 2) - 8._wp*y_cc(k - 1) - y_cc(k + 2) + 8._wp*y_cc(k + 1))
-                        !$acc loop seq
-                        do q = 1, num_fluids
-                            dmu_dy_phases(q) = coeff_4th*(mu_shear_phases_ym2(q) - 8._wp*mu_shear_phases_ym(q) + &
-                                                          8._wp*mu_shear_phases_yp(q) - mu_shear_phases_yp2(q))
-                        end do
-                    else if (n > 0 .and. k > 0 .and. k < n) then
+                    if (n > 0 .and. k > 0 .and. k < n) then
                         call s_compute_phase_viscosity_at_cell(q_prim_vf, j, k + 1, l, mu_shear_phases_yp, mu_bulk_phases)
                         call s_compute_phase_viscosity_at_cell(q_prim_vf, j, k - 1, l, mu_shear_phases_ym, mu_bulk_phases)
                         !$acc loop seq
@@ -1873,18 +1604,7 @@ contains
                     end if
 
                     ! ===== Z-DIRECTION GRADIENT =====
-                    if (use_4th_order_z) then
-                        call s_compute_phase_viscosity_at_cell(q_prim_vf, j, k, l + 1, mu_shear_phases_zp, mu_bulk_phases)
-                        call s_compute_phase_viscosity_at_cell(q_prim_vf, j, k, l - 1, mu_shear_phases_zm, mu_bulk_phases)
-                        call s_compute_phase_viscosity_at_cell(q_prim_vf, j, k, l + 2, mu_shear_phases_zp2, mu_bulk_phases)
-                        call s_compute_phase_viscosity_at_cell(q_prim_vf, j, k, l - 2, mu_shear_phases_zm2, mu_bulk_phases)
-                        coeff_4th = 1._wp/(z_cc(l - 2) - 8._wp*z_cc(l - 1) - z_cc(l + 2) + 8._wp*z_cc(l + 1))
-                        !$acc loop seq
-                        do q = 1, num_fluids
-                            dmu_dz_phases(q) = coeff_4th*(mu_shear_phases_zm2(q) - 8._wp*mu_shear_phases_zm(q) + &
-                                                          8._wp*mu_shear_phases_zp(q) - mu_shear_phases_zp2(q))
-                        end do
-                    else if (p > 0 .and. l > 0 .and. l < p) then
+                    if (p > 0 .and. l > 0 .and. l < p) then
                         call s_compute_phase_viscosity_at_cell(q_prim_vf, j, k, l + 1, mu_shear_phases_zp, mu_bulk_phases)
                         call s_compute_phase_viscosity_at_cell(q_prim_vf, j, k, l - 1, mu_shear_phases_zm, mu_bulk_phases)
                         !$acc loop seq

@@ -27,8 +27,7 @@ contains
 
     !> Computes velocity gradients at a single cell (j,k,l) using finite differences
     !! Works for 1D, 2D, and 3D cases
-    !! For non-Newtonian fluids with sufficient buffer, uses 4th order central differences
-    !! For Newtonian fluids or near boundaries, uses 2nd order differences
+    !! Uses 2nd order central differences in interior, 2nd/1st order one-sided at boundaries
     !! Bounds checking uses idwbuff to ensure safe array access in MPI decomposed domains
     !! @param q_prim_vf Primitive variables
     !! @param j x index
@@ -47,9 +46,7 @@ contains
         integer, intent(in) :: j, k, l
         real(wp), intent(out) :: D_xx, D_yy, D_zz, D_xy, D_xz, D_yz
 
-        logical :: use_4th_order_x, use_4th_order_y, use_4th_order_z
         logical :: j_in_bounds, k_in_bounds, l_in_bounds
-        real(wp) :: coeff_4th
         integer :: j_lo, j_hi, k_lo, k_hi, l_lo, l_hi
 
         ! Array bounds (including ghost cells)
@@ -76,29 +73,17 @@ contains
             return
         end if
 
-        ! Check if we can use 4th order (non-Newtonian with sufficient buffer AND safe array access)
-        use_4th_order_x = any_non_newtonian .and. (buff_size >= 4) .and. &
-                          (j - 2 >= j_lo) .and. (j + 2 <= j_hi)
-        use_4th_order_y = any_non_newtonian .and. (buff_size >= 4) .and. &
-                          (k - 2 >= k_lo) .and. (k + 2 <= k_hi) .and. (n > 0)
-        use_4th_order_z = any_non_newtonian .and. (buff_size >= 4) .and. &
-                          (l - 2 >= l_lo) .and. (l + 2 <= l_hi) .and. (p > 0)
-
         ! Compute D_xx = du/dx
-        if (use_4th_order_x) then
-            coeff_4th = 1._wp/(x_cc(j - 2) - 8._wp*x_cc(j - 1) - x_cc(j + 2) + 8._wp*x_cc(j + 1))
-            D_xx = coeff_4th*(q_prim_vf(momxb)%sf(j - 2, k, l) - 8._wp*q_prim_vf(momxb)%sf(j - 1, k, l) + &
-                              8._wp*q_prim_vf(momxb)%sf(j + 1, k, l) - q_prim_vf(momxb)%sf(j + 2, k, l))
-        else if (j - 1 >= j_lo .and. j + 1 <= j_hi) then
+        if (j - 1 >= j_lo .and. j + 1 <= j_hi) then
             ! 2nd order central difference
             D_xx = (q_prim_vf(momxb)%sf(j + 1, k, l) - q_prim_vf(momxb)%sf(j - 1, k, l)) / &
                    (x_cc(j + 1) - x_cc(j - 1))
         else if (j + 1 <= j_hi) then
-            ! Forward difference
+            ! Forward: 1st order one-sided
             D_xx = (q_prim_vf(momxb)%sf(j + 1, k, l) - q_prim_vf(momxb)%sf(j, k, l)) / &
                    (x_cc(j + 1) - x_cc(j))
         else if (j - 1 >= j_lo) then
-            ! Backward difference
+            ! Backward: 1st order one-sided
             D_xx = (q_prim_vf(momxb)%sf(j, k, l) - q_prim_vf(momxb)%sf(j - 1, k, l)) / &
                    (x_cc(j) - x_cc(j - 1))
         else
@@ -107,20 +92,16 @@ contains
 
         ! Compute D_yy = dv/dy (2D and 3D only)
         if (n > 0) then
-            if (use_4th_order_y) then
-                coeff_4th = 1._wp/(y_cc(k - 2) - 8._wp*y_cc(k - 1) - y_cc(k + 2) + 8._wp*y_cc(k + 1))
-                D_yy = coeff_4th*(q_prim_vf(momxb + 1)%sf(j, k - 2, l) - 8._wp*q_prim_vf(momxb + 1)%sf(j, k - 1, l) + &
-                                  8._wp*q_prim_vf(momxb + 1)%sf(j, k + 1, l) - q_prim_vf(momxb + 1)%sf(j, k + 2, l))
-            else if (k - 1 >= k_lo .and. k + 1 <= k_hi) then
+            if (k - 1 >= k_lo .and. k + 1 <= k_hi) then
                 ! 2nd order central difference
                 D_yy = (q_prim_vf(momxb + 1)%sf(j, k + 1, l) - q_prim_vf(momxb + 1)%sf(j, k - 1, l)) / &
                        (y_cc(k + 1) - y_cc(k - 1))
             else if (k + 1 <= k_hi) then
-                ! Forward difference
+                ! Forward: 1st order one-sided
                 D_yy = (q_prim_vf(momxb + 1)%sf(j, k + 1, l) - q_prim_vf(momxb + 1)%sf(j, k, l)) / &
                        (y_cc(k + 1) - y_cc(k))
             else if (k - 1 >= k_lo) then
-                ! Backward difference
+                ! Backward: 1st order one-sided
                 D_yy = (q_prim_vf(momxb + 1)%sf(j, k, l) - q_prim_vf(momxb + 1)%sf(j, k - 1, l)) / &
                        (y_cc(k) - y_cc(k - 1))
             else
@@ -132,20 +113,16 @@ contains
 
         ! Compute D_zz = dw/dz (3D only)
         if (p > 0) then
-            if (use_4th_order_z) then
-                coeff_4th = 1._wp/(z_cc(l - 2) - 8._wp*z_cc(l - 1) - z_cc(l + 2) + 8._wp*z_cc(l + 1))
-                D_zz = coeff_4th*(q_prim_vf(momxb + 2)%sf(j, k, l - 2) - 8._wp*q_prim_vf(momxb + 2)%sf(j, k, l - 1) + &
-                                  8._wp*q_prim_vf(momxb + 2)%sf(j, k, l + 1) - q_prim_vf(momxb + 2)%sf(j, k, l + 2))
-            else if (l - 1 >= l_lo .and. l + 1 <= l_hi) then
+            if (l - 1 >= l_lo .and. l + 1 <= l_hi) then
                 ! 2nd order central difference
                 D_zz = (q_prim_vf(momxb + 2)%sf(j, k, l + 1) - q_prim_vf(momxb + 2)%sf(j, k, l - 1)) / &
                        (z_cc(l + 1) - z_cc(l - 1))
             else if (l + 1 <= l_hi) then
-                ! Forward difference
+                ! Forward: 1st order one-sided
                 D_zz = (q_prim_vf(momxb + 2)%sf(j, k, l + 1) - q_prim_vf(momxb + 2)%sf(j, k, l)) / &
                        (z_cc(l + 1) - z_cc(l))
             else if (l - 1 >= l_lo) then
-                ! Backward difference
+                ! Backward: 1st order one-sided
                 D_zz = (q_prim_vf(momxb + 2)%sf(j, k, l) - q_prim_vf(momxb + 2)%sf(j, k, l - 1)) / &
                        (z_cc(l) - z_cc(l - 1))
             else
@@ -157,15 +134,7 @@ contains
 
         ! Compute D_xy = 0.5*(du/dy + dv/dx) (2D and 3D only)
         if (n > 0) then
-            if (use_4th_order_x .and. use_4th_order_y) then
-                ! 4th order central difference for both terms
-                coeff_4th = 1._wp/(y_cc(k - 2) - 8._wp*y_cc(k - 1) - y_cc(k + 2) + 8._wp*y_cc(k + 1))
-                D_xy = 0.5_wp*coeff_4th*(q_prim_vf(momxb)%sf(j, k - 2, l) - 8._wp*q_prim_vf(momxb)%sf(j, k - 1, l) + &
-                                          8._wp*q_prim_vf(momxb)%sf(j, k + 1, l) - q_prim_vf(momxb)%sf(j, k + 2, l))
-                coeff_4th = 1._wp/(x_cc(j - 2) - 8._wp*x_cc(j - 1) - x_cc(j + 2) + 8._wp*x_cc(j + 1))
-                D_xy = D_xy + 0.5_wp*coeff_4th*(q_prim_vf(momxb + 1)%sf(j - 2, k, l) - 8._wp*q_prim_vf(momxb + 1)%sf(j - 1, k, l) + &
-                                                 8._wp*q_prim_vf(momxb + 1)%sf(j + 1, k, l) - q_prim_vf(momxb + 1)%sf(j + 2, k, l))
-            else if (j - 1 >= j_lo .and. j + 1 <= j_hi .and. k - 1 >= k_lo .and. k + 1 <= k_hi) then
+            if (j - 1 >= j_lo .and. j + 1 <= j_hi .and. k - 1 >= k_lo .and. k + 1 <= k_hi) then
                 ! 2nd order central difference
                 D_xy = 0.5_wp*((q_prim_vf(momxb)%sf(j, k + 1, l) - q_prim_vf(momxb)%sf(j, k - 1, l)) / &
                                 (y_cc(k + 1) - y_cc(k - 1)) + &
@@ -189,15 +158,7 @@ contains
 
         ! Compute D_xz = 0.5*(du/dz + dw/dx) (3D only)
         if (p > 0) then
-            if (use_4th_order_x .and. use_4th_order_z) then
-                ! 4th order central difference
-                coeff_4th = 1._wp/(z_cc(l - 2) - 8._wp*z_cc(l - 1) - z_cc(l + 2) + 8._wp*z_cc(l + 1))
-                D_xz = 0.5_wp*coeff_4th*(q_prim_vf(momxb)%sf(j, k, l - 2) - 8._wp*q_prim_vf(momxb)%sf(j, k, l - 1) + &
-                                          8._wp*q_prim_vf(momxb)%sf(j, k, l + 1) - q_prim_vf(momxb)%sf(j, k, l + 2))
-                coeff_4th = 1._wp/(x_cc(j - 2) - 8._wp*x_cc(j - 1) - x_cc(j + 2) + 8._wp*x_cc(j + 1))
-                D_xz = D_xz + 0.5_wp*coeff_4th*(q_prim_vf(momxb + 2)%sf(j - 2, k, l) - 8._wp*q_prim_vf(momxb + 2)%sf(j - 1, k, l) + &
-                                                 8._wp*q_prim_vf(momxb + 2)%sf(j + 1, k, l) - q_prim_vf(momxb + 2)%sf(j + 2, k, l))
-            else if (j - 1 >= j_lo .and. j + 1 <= j_hi .and. l - 1 >= l_lo .and. l + 1 <= l_hi) then
+            if (j - 1 >= j_lo .and. j + 1 <= j_hi .and. l - 1 >= l_lo .and. l + 1 <= l_hi) then
                 ! 2nd order central difference
                 D_xz = 0.5_wp*((q_prim_vf(momxb)%sf(j, k, l + 1) - q_prim_vf(momxb)%sf(j, k, l - 1)) / &
                                 (z_cc(l + 1) - z_cc(l - 1)) + &
@@ -212,15 +173,7 @@ contains
 
         ! Compute D_yz = 0.5*(dv/dz + dw/dy) (3D only)
         if (p > 0 .and. n > 0) then
-            if (use_4th_order_y .and. use_4th_order_z) then
-                ! 4th order central difference
-                coeff_4th = 1._wp/(z_cc(l - 2) - 8._wp*z_cc(l - 1) - z_cc(l + 2) + 8._wp*z_cc(l + 1))
-                D_yz = 0.5_wp*coeff_4th*(q_prim_vf(momxb + 1)%sf(j, k, l - 2) - 8._wp*q_prim_vf(momxb + 1)%sf(j, k, l - 1) + &
-                                          8._wp*q_prim_vf(momxb + 1)%sf(j, k, l + 1) - q_prim_vf(momxb + 1)%sf(j, k, l + 2))
-                coeff_4th = 1._wp/(y_cc(k - 2) - 8._wp*y_cc(k - 1) - y_cc(k + 2) + 8._wp*y_cc(k + 1))
-                D_yz = D_yz + 0.5_wp*coeff_4th*(q_prim_vf(momxb + 2)%sf(j, k - 2, l) - 8._wp*q_prim_vf(momxb + 2)%sf(j, k - 1, l) + &
-                                                 8._wp*q_prim_vf(momxb + 2)%sf(j, k + 1, l) - q_prim_vf(momxb + 2)%sf(j, k + 2, l))
-            else if (k - 1 >= k_lo .and. k + 1 <= k_hi .and. l - 1 >= l_lo .and. l + 1 <= l_hi) then
+            if (k - 1 >= k_lo .and. k + 1 <= k_hi .and. l - 1 >= l_lo .and. l + 1 <= l_hi) then
                 ! 2nd order central difference
                 D_yz = 0.5_wp*((q_prim_vf(momxb + 1)%sf(j, k, l + 1) - q_prim_vf(momxb + 1)%sf(j, k, l - 1)) / &
                                 (z_cc(l + 1) - z_cc(l - 1)) + &
